@@ -218,6 +218,14 @@
             ],
           }
         }],
+        ['mpg123_backend=="win32_wasapi"', {
+          'link_settings': {
+            'libraries': [
+              '-lavrt.lib',
+			  '-lole32.lib',
+            ],
+          }
+        }],
       ],
       'sources': [ 'src/output/<(mpg123_backend).c' ],
     },

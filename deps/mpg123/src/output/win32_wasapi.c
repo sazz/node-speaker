@@ -53,7 +53,7 @@ mpg123_module_t mpg123_output_module_info = {
                 { (punk)->Release(); (punk) = NULL; }
 
 /* todo: move into handle struct */
-typedef struct _wasapi_state_struct {
+struct wasapi_state_struct {
   IMMDeviceEnumerator *pEnumerator;
   IMMDevice *pDevice;
   IAudioClient *pAudioClient;
@@ -67,12 +67,12 @@ typedef struct _wasapi_state_struct {
   DWORD taskIndex;
   char is_playing;
   DWORD framesize;
-} wasapi_state_struct;
+};
 
 /* setup endpoints */
 static int open_win32(struct audio_output_struct *ao){
   HRESULT hr = 0;
-  wasapi_state_struct *state;
+  struct wasapi_state_struct *state;
 
   debug1("%s",__FUNCTION__);
   if(!ao || ao->userptr) return -1; /* userptr should really be null */
@@ -102,8 +102,8 @@ static int open_win32(struct audio_output_struct *ao){
   return 1;
 }
 
-/*
-  typedef struct tWAVEFORMATEX {
+
+  struct WAVEFORMATEX {
     WORD wFormatTag;
     WORD nChannels;
     DWORD nSamplesPerSec;
@@ -112,13 +112,12 @@ static int open_win32(struct audio_output_struct *ao){
     WORD wBitsPerSample;
     WORD cbSize;
 
-  } WAVEFORMATEX;
-*/
+  };
+
 
 static int formats_generator(const struct audio_output_struct * const ao, const int waveformat, WAVEFORMATEX *const format){
   DWORD bytes_per_sample = 0;
   WORD tag = WAVE_FORMAT_PCM;
-  debug1("%s",__FUNCTION__);
   int ret = waveformat;
   switch(waveformat){
     case MPG123_ENC_SIGNED_8:
@@ -155,13 +154,13 @@ static int get_formats_win32(struct audio_output_struct *ao){
   /* PLEASE check with write_init and write_win32 buffer size calculation in case it is able to support something other than 16bit */
   HRESULT hr;
   int ret = 0;
-  debug1("%s",__FUNCTION__);
-
+  struct wasapi_state_struct *state;
+  struct WAVEFORMATEX wf;
+  
   if(!ao || !ao->userptr) return -1;
-  wasapi_state_struct *state = (wasapi_state_struct *) ao->userptr;
-  debug2("channels %d, rate %ld",ao->channels, ao->rate);
 
-  WAVEFORMATEX wf;
+  state = (struct wasapi_state_struct *) ao->userptr;
+
 
    if(ao->format & MPG123_ENC_SIGNED_8){
       formats_generator(ao,MPG123_ENC_SIGNED_8,&wf);
@@ -205,12 +204,13 @@ static int get_formats_win32(struct audio_output_struct *ao){
 static int write_init(struct audio_output_struct *ao){
   HRESULT hr;
   double offset = 0.5;
-
+  struct wasapi_state_struct *state;
+  WAVEFORMATEX s16;
+  
   debug1("%s",__FUNCTION__);
   if(!ao || !ao->userptr) return -1;
-  wasapi_state_struct *state = (wasapi_state_struct *) ao->userptr;
+  state =(struct wasapi_state_struct *) ao->userptr;
 
-  WAVEFORMATEX s16;
   formats_generator(ao,ao->format,&s16);
   state->framesize = s16.nBlockAlign;
   debug1("block size %ld", state->framesize);
@@ -268,8 +268,10 @@ Exit:
 /* Set play mode if unset, also raise thread priority */
 static HRESULT play_init(struct audio_output_struct *ao){
   HRESULT hr = S_OK;
+  struct wasapi_state_struct *state;
+  
   if(!ao || !ao->userptr) return -1;
-  wasapi_state_struct *state = (wasapi_state_struct *) ao->userptr;
+  state =(struct wasapi_state_struct *) ao->userptr;
   if(!state->is_playing){
     debug1("%s",__FUNCTION__);
     state->hTask = AvSetMmThreadCharacteristicsW(L"Pro Audio", &state->taskIndex);
@@ -287,18 +289,24 @@ Exit:
 /* copy audio into IAudioRenderClient provided buffer */
 static int write_win32(struct audio_output_struct *ao, unsigned char *buf, int len){
   HRESULT hr;
+  struct wasapi_state_struct *state;
   size_t to_copy = 0;
+  size_t frames_in = 0;
+#ifdef WASAPI_EVENT_MODE  
+  DWORD retval = -1;
+  int flag = 0; /* Silence flag */
+#else /* PUSH mode code */
+    UINT32 numFramesAvailable, numFramesPadding;
+#endif
   debug1("%s",__FUNCTION__);
   if(!ao || !ao->userptr) return -1;
-  wasapi_state_struct *state = (wasapi_state_struct *) ao->userptr;
+  state =(struct wasapi_state_struct *) ao->userptr;
   if(!len) return 0;
   if(!state->pRenderClient) write_init(ao);
-  size_t frames_in = len/state->framesize; /* Frames in buf, is framesize even correct? */
+  frames_in = len/state->framesize; /* Frames in buf, is framesize even correct? */
   debug("mode entered");
 #ifdef WASAPI_EVENT_MODE
   /* Event mode WASAPI */
-  DWORD retval = -1;
-  int flag = 0; /* Silence flag */
   feed_again:
   if(!state->pData){
     /* Acquire buffer */
@@ -355,7 +363,6 @@ static int write_win32(struct audio_output_struct *ao, unsigned char *buf, int l
   if(frames_in > 0)
     goto feed_again;
 #else /* PUSH mode code */
-    UINT32 numFramesAvailable, numFramesPadding;
     debug1("block size %ld", state->framesize);
 feed_again:
     /* How much buffer do we get to use? */
@@ -405,11 +412,12 @@ feed_again:
 }
 
 static void flush_win32(struct audio_output_struct *ao){
+  struct wasapi_state_struct *state;
+  HRESULT hr;
   /* Wait for the last buffer to play before stopping. */
   debug1("%s",__FUNCTION__);
   if(!ao || !ao->userptr) return;
-  wasapi_state_struct *state = (wasapi_state_struct *) ao->userptr;
-  HRESULT hr;
+  state =(struct wasapi_state_struct *) ao->userptr;
   if(!state->pAudioClient) return;
   state->pData = NULL;
   hr = IAudioClient_Stop(state->pAudioClient);
@@ -423,9 +431,10 @@ static void flush_win32(struct audio_output_struct *ao){
 
 static int close_win32(struct audio_output_struct *ao)
 {
+  struct wasapi_state_struct *state;
   debug1("%s",__FUNCTION__);
   if(!ao || !ao->userptr) return -1;
-  wasapi_state_struct *state = (wasapi_state_struct *) ao->userptr;
+  state =(struct wasapi_state_struct *) ao->userptr;
 #ifdef WASAPI_EVENT_MODE
   if(state->pData){
     /* Play all in buffer before closing */
